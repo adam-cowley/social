@@ -26,6 +26,7 @@ import org.neo4j.graphdb.ResourceIterator;
 import org.neo4j.logging.Log;
 
 import static ac.owley.social.feed.Time.POSTED_ON;
+import static java.util.Comparator.naturalOrder;
 import static java.util.Comparator.reverseOrder;
 
 public class GetFeed
@@ -33,7 +34,6 @@ public class GetFeed
 
     private final static String CURSOR_TYPE_BEFORE = "before";
     private final static String CURSOR_TYPE_AFTER = "after";
-
 
     private final GraphDatabaseService db;
 
@@ -73,12 +73,19 @@ public class GetFeed
             cursorType = CURSOR_TYPE_BEFORE;
         }
 
+        List<Node> output;
+
         if ( cursorType.equals(CURSOR_TYPE_AFTER) ) {
-//            return getPostsAfter(following, dateTime);
+            output = getPostsAfter(following, dateTime, limit);
+        }
+        else {
+            output = getPostsBefore(following, dateTime, limit);
         }
 
         // Get the next X posts before this post
-        return getPostsBefore(following, dateTime, limit);
+        return output
+                .stream()
+                .map(e -> new PostResult( Decorator.decoratePost( e ) ));
     }
 
     private Node getUser(String username) {
@@ -113,11 +120,52 @@ public class GetFeed
         return ZonedDateTime.now();
     }
 
-    // TODO: getPostsAfter
-    // Same as below, but run in reverse order
+    // Get all posts from each day in ascending order from cursor, up until the limit
+    // Take the first x rows
+    // Reverse for display
+    // Return
 
-    private Stream<PostResult> getPostsBefore(Set users, ZonedDateTime dateTime, Double limit) {
-        List<PostResult> output = new ArrayList<>(  );
+    private List<Node> getPostsAfter(Set users, ZonedDateTime dateTime, Double limit) {
+        final List<Node> output = new ArrayList<>(  );
+
+        ZonedDateTime originalDateTime = dateTime;
+
+        // Set a maximum date to stop the code running forever
+        ZonedDateTime ceiling = ZonedDateTime.now();
+
+        // Get all posts from each day in ascending order from the cursor, up until the limit has been reached
+        while ( output.size() < limit && dateTime.isBefore( ceiling ) ) {
+            List<Node> posts = getPostsOnDate(users, dateTime, naturalOrder());
+
+            posts.forEach( n -> {
+                ZonedDateTime postCreatedAt = (ZonedDateTime) ((Node) n).getProperty( Properties.postCreatedAt );
+
+                // Add to the
+                if ( postCreatedAt.isAfter( originalDateTime ) ) {
+                    output.add( n );
+                }
+            } );
+
+            // Try again with the day after
+            dateTime = dateTime.plusDays(1);
+        }
+
+        // Trim to size and return
+        List<Node> sortedOutput = output.subList( 0, Math.min(limit.intValue(), output.size()) );
+
+        // Sort into descending order for the UI
+        sortedOutput.sort(
+            Comparator.comparing(
+                n -> ( (ZonedDateTime) ((Node) n).getProperty( Properties.postCreatedAt ) ).toEpochSecond(),
+                reverseOrder()
+            )
+        );
+
+        return sortedOutput;
+    }
+
+    private List<Node> getPostsBefore(Set users, ZonedDateTime dateTime, Double limit) {
+        final List<Node> output = new ArrayList<>(  );
 
         ZonedDateTime originalDateTime = dateTime;
 
@@ -132,7 +180,7 @@ public class GetFeed
 
                 // Add to the
                 if ( postCreatedAt.isBefore( originalDateTime ) ) {
-                    output.add( new PostResult( n ) );
+                    output.add( n );
                 }
             } );
 
@@ -141,7 +189,7 @@ public class GetFeed
         }
 
         // Trim to size and return
-        return output.subList( 0, Math.min(limit.intValue(), output.size()) ).stream();
+        return output.subList( 0, Math.min(limit.intValue(), output.size()) );
     }
 
     private List<Node> getPostsOnDate(Set<Node> users, ZonedDateTime date, Comparator comparator) {

@@ -7,5 +7,6 @@ public class Properties
 
     public final static String postId = "id";
     public final static String postCreatedAt = "createdAt";
+    public final static String postBody = "body";
 
 }

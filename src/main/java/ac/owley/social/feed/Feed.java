@@ -31,10 +31,6 @@ public class Feed
     ) {
         GetFeed feed = new GetFeed(db, log);
 
-        if ( limit == null ) {
-            limit = 10d;
-        }
-
         return feed.forUser(username, cursorType, sinceId, limit);
     }
 
