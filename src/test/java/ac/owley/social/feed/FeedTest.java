@@ -7,6 +7,8 @@ import org.junit.Rule;
 import org.junit.Test;
 
 import java.time.ZonedDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.neo4j.graphdb.GraphDatabaseService;
 import org.neo4j.graphdb.Node;
@@ -14,10 +16,12 @@ import org.neo4j.graphdb.Result;
 import org.neo4j.graphdb.Transaction;
 import org.neo4j.harness.junit.Neo4jRule;
 
+import static junit.framework.TestCase.assertEquals;
+import static junit.framework.TestCase.assertTrue;
+import static org.junit.Assert.assertFalse;
+
 public class FeedTest
 {
-
-    private final static ZonedDateTime now = ZonedDateTime.now();
 
     @Rule
     public Neo4jRule neo4j = new Neo4jRule()
@@ -32,6 +36,7 @@ public class FeedTest
                     " CREATE (u1)-[:FOLLOWS]->(u2) " +
                     " CREATE (u1)-[:FOLLOWS]->(u3) " +
                     " CREATE (u1)-[:FOLLOWS]->(u4) " +
+                    " CREATE (u1)-[:FOLLOWS]->(u5) " +
 
                     " CREATE (u2)-[:POSTED_ON_2019_06_10]->(  :Post {id: '7', createdAt: datetime('2019-06-10T13:40:00.0000Z')})" +
                     " CREATE (u2)-[:POSTED_ON_2019_06_10]->(  :Post {id: '6', createdAt: datetime('2019-06-10T13:30:00.0000Z')})" +
@@ -46,32 +51,72 @@ public class FeedTest
             );
 
     @Test
-    public void shouldReturnStreamOfResults() {
-        GraphDatabaseService db = neo4j.getGraphDatabaseService();
+    public void shouldGetLatestPostsAndLimitNumberOfResults() {
+        List<String> ids = runAndGetIds("CALL social.feed('adam', 1) YIELD post, author RETURN *");
 
-        try ( Transaction tx = db.beginTx() )  {
-            Result res = db.execute("CALL social.feed('adam', 1) YIELD post, author RETURN *");
+        assertEquals(1, ids.size());
 
-            while ( res.hasNext() ) {
-                Node post = (Node) res.next().get("post");
-
-                System.out.println(post.getProperty("id"));
-            }
-        }
+        assertTrue( ids.contains( "7" ) );
     }
 
     @Test
     public void shouldReturnResultsOverMultipleDays() {
+        List<String> ids = runAndGetIds("CALL social.feed('adam', 10) YIELD post, author RETURN *");
+
+        assertEquals(7, ids.size());
+    }
+
+    @Test
+    public void shouldCutOffResultsInDayForBeforeCursor() {
+        List<String> ids = runAndGetIds("CALL social.feed('adam', 3, 'before', '7') YIELD post, author RETURN *");
+
+        assertEquals(3, ids.size());
+
+        assertTrue( ids.contains( "6" ) );
+        assertTrue( ids.contains( "5" ) );
+        assertTrue( ids.contains( "4" ) );
+    }
+
+    @Test
+    public void shouldPaginateBeforeCursor() {
         GraphDatabaseService db = neo4j.getGraphDatabaseService();
 
         try ( Transaction tx = db.beginTx() )  {
-            Result res = db.execute("CALL social.feed('adam', 10) YIELD post, author RETURN *");
+            Result all = db.execute("CALL social.feed('adam', 4) YIELD post RETURN collect(post.id) AS ids");
+            List<String> allIds = (List) all.next().get("ids");
+
+            Result batches = db.execute(
+                    "CALL social.feed('adam', 2) YIELD post WITH collect(post.id) AS first " +
+                    "CALL social.feed('adam', 2, 'before', first[-1]) YIELD post WITH first, collect(post.id) AS second " +
+                    "RETURN first + second AS ids"
+            );
+            List<String> batchIds = (List) batches.next().get("ids");
+
+            assertEquals(allIds, batchIds);
+        }
+    }
+
+    private List<String> runAndGetIds(String query) {
+        GraphDatabaseService db = neo4j.getGraphDatabaseService();
+
+        List<String> ids = new ArrayList<>(  );
+
+        try ( Transaction tx = db.beginTx() )  {
+            Result res = db.execute(query);
 
             while ( res.hasNext() ) {
                 Node post = (Node) res.next().get("post");
 
-                System.out.println(post.getProperty("id"));
+                ids.add( (String) post.getProperty("id") );
+
+                System.out.println(
+                        post.getProperty("id")
+                                + " -- "
+                                + post.getProperty("createdAt")
+                );
             }
+
+            return ids;
         }
     }
 }

@@ -22,6 +22,8 @@ import org.neo4j.graphdb.GraphDatabaseService;
 import org.neo4j.graphdb.Node;
 import org.neo4j.graphdb.Relationship;
 import org.neo4j.graphdb.RelationshipType;
+import org.neo4j.graphdb.ResourceIterator;
+import org.neo4j.logging.Log;
 
 import static ac.owley.social.feed.Time.POSTED_ON;
 import static java.util.Comparator.reverseOrder;
@@ -35,8 +37,11 @@ public class GetFeed
 
     private final GraphDatabaseService db;
 
-    public GetFeed( GraphDatabaseService db) {
+    private final Log log;
+
+    public GetFeed( GraphDatabaseService db, Log log ) {
         this.db = db;
+        this.log = log;
     }
 
     public Stream<PostResult> forUser(String username, String cursorType, String sinceId, Double limit) {
@@ -44,7 +49,7 @@ public class GetFeed
         Node user = getUser(username);
 
         if ( user == null ) {
-            System.out.println("No user "+ username);
+            log.debug( "Cannot find user "+ username +". Returning empty stream" );
             return Stream.empty();
         }
 
@@ -52,14 +57,14 @@ public class GetFeed
         Set following = getFollowing( user );
 
         if ( following.size() == 0 ) {
-            System.out.println("No follows "+ username);
+            log.debug( "User"+ username +" isn't following anyone. Returning empty stream" );
             return Stream.empty();
         }
 
         // Get Date of last/next post
         ZonedDateTime dateTime = ZonedDateTime.now();
 
-        if ( sinceId != null ) {
+        if ( sinceId != null && !sinceId.equals("") ) {
             dateTime = getPostTime( sinceId );
         }
 
@@ -72,6 +77,7 @@ public class GetFeed
 //            return getPostsAfter(following, dateTime);
         }
 
+        // Get the next X posts before this post
         return getPostsBefore(following, dateTime, limit);
     }
 
@@ -96,12 +102,19 @@ public class GetFeed
     private ZonedDateTime getPostTime(String postId) {
         Node post = db.findNode( Labels.Post, Properties.postId, postId );
 
+        ResourceIterator<Node> nodes = db.findNodes( Labels.Post );
+
         if ( post != null ) {
-            ZonedDateTime postCreatedAt = (ZonedDateTime) post.getProperty( Properties.postCreatedAt, ZonedDateTime.now() );
+            return (ZonedDateTime) post.getProperty( Properties.postCreatedAt, ZonedDateTime.now() );
         }
+
+        log.debug( "Cannot find post "+ postId +". Using now() as value" );
 
         return ZonedDateTime.now();
     }
+
+    // TODO: getPostsAfter
+    // Same as below, but run in reverse order
 
     private Stream<PostResult> getPostsBefore(Set users, ZonedDateTime dateTime, Double limit) {
         List<PostResult> output = new ArrayList<>(  );
@@ -109,7 +122,7 @@ public class GetFeed
         ZonedDateTime originalDateTime = dateTime;
 
         // Set a minimum date to stop the code running forever
-        ZonedDateTime floor = ZonedDateTime.parse( "2019-01-01T00:00:00.000Z" );
+        ZonedDateTime floor = ZonedDateTime.parse("2007-12-03T10:15:30+01:00[Europe/London]");
 
         while ( output.size() < limit && dateTime.isAfter( floor ) ) {
             List<Node> posts = getPostsOnDate(users, dateTime, reverseOrder());
@@ -124,15 +137,8 @@ public class GetFeed
             } );
 
             // Try again with the day before
-            dateTime.minusDays(1);
+            dateTime = dateTime.minusDays(1);
         }
-
-
-
-
-
-
-
 
         // Trim to size and return
         return output.subList( 0, Math.min(limit.intValue(), output.size()) ).stream();
